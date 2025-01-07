@@ -1,42 +1,67 @@
 import requests
 from bs4 import BeautifulSoup
-from selenium.webdriver.common.by import By
-from selenium import webdriver
+from urllib.parse import urlparse, urljoin
 import re
-
-driver = webdriver.Chrome()
-url = "https://www.forbes.com"
+from collections import deque
 
 
-def filter_links(linklist):
-    pattern = re.compile(r'^(?!forbes\.com)')
-    filtered_links = [link['href'] for link in linklist if 'href' in link.attrs and pattern.match(link['href'])]
-    return filtered_links
-
-def scrape_links(url):
-    response = requests.get(url)
-
-    if response.status_code == 200:
-        soup = BeautifulSoup(response.text, 'html.parser')
-        title = soup.title.text
-        print(f'Title of the page: {title}')
-
-        # Example: Find all links on the page
-        links = soup.find_all('a', href=True)
+def is_top_level_domain(url):
+    parsed = urlparse(url)
+    path = parsed.path.strip('/')
+    return not path and parsed.scheme in ['http', 'https']
 
 
-        # print('\nLinks on the page:')
-        # for link in links:
-        #     print(link['href'])
+def get_domain(url):
+    parsed = urlparse(url)
+    return f"{parsed.scheme}://{parsed.netloc}"
 
-        filtered_link_list=filter_links(links)
-        for link in filtered_link_list:
-            print(link['href'])
 
-    else:
-        print(f'Failed to retrieve the page. Status code: {response.status_code}')
+def scrape_links_dfs(start_url, max_depth=5):
+    stack = [(start_url, 0)]  # (url, depth)
+    visited = set()
 
-driver.get(url)
-scrape_links(url)
+    while stack and len(visited) < 100:  # Limit to 100 sites for safety
+        current_url, depth = stack.pop()
 
-print()
+        if depth >= max_depth:
+            continue
+
+        if current_url in visited:
+            continue
+
+        try:
+            response = requests.get(current_url, timeout=5)
+            if response.status_code != 200:
+                continue
+
+            visited.add(current_url)
+            print(f"Visiting [{depth}]: {current_url}")
+
+            soup = BeautifulSoup(response.text, "html.parser")
+            links = soup.find_all('a', href=True)
+
+            # Process all links from the page
+            for link in links:
+                href = link['href']
+                full_url = urljoin(current_url, href)
+
+                # Only add if it's a new top-level domain
+                if (is_top_level_domain(full_url) and
+                        full_url not in visited and
+                        get_domain(full_url) not in [get_domain(v) for v in visited]):
+                    stack.append((full_url, depth + 1))
+
+        except Exception as e:
+            print(f"Error processing {current_url}: {str(e)}")
+            continue
+
+    return visited
+
+
+# Main execution
+if __name__ == "__main__":
+    start_url = "https://wikipedia.com/"
+    visited_sites = scrape_links_dfs(start_url, max_depth=3)
+    print("\nVisited sites:")
+    for site in visited_sites:
+        print(site)
